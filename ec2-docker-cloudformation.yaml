@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template para criar uma instância EC2 com Docker e Docker Compose via UserData
+
+Parameters:
+  InstanceType:
+    Type: String
+    Description: Tipo da instância EC2
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t3.micro
+    ConstraintDescription: "Deve ser um dos tipos de instância permitidos."
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Nome do par de chaves para acessar a instância
+    ConstraintDescription: "Deve ser o nome de um par de chaves válido."
+
+Resources:
+  MyEC2Instance: #Define a instância EC2 com Docker e Docker Compose configurados via
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType #Permite escolher o tipo da instância EC2 (com t2.micro como padrão).
+      KeyName: !Ref KeyName #Nome do par de chaves para acesso via SSH à instância.
+      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMI]
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+      UserData: #UserData. O UserData contém um script bash que: Atualiza pacotes e instala Docker. / Instala o Docker Compose. / Cria um arquivo docker-compose.yml que usa uma imagem do Nginx. / Executa docker-compose up -d para rodar o Nginx no contêiner.
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Atualizar pacotes e instalar Docker
+          yum update -y
+          amazon-linux-extras install docker -y
+          service docker start
+          usermod -a -G docker ec2-user
+
+          # Instalar Docker Compose
+          curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+
+          # Criar arquivo docker-compose.yml
+          cat <<EOF > /home/ec2-user/docker-compose.yml
+          version: '3'
+          services:
+            web:
+              image: nginx
+              ports:
+                - "80:80"
+          EOF
+
+          # Iniciar Docker Compose
+          cd /home/ec2-user
+          docker-compose up -d
+          
+      Tags:
+        - Key: Name
+          Value: MyDockerEC2Instance
+
+  InstanceSecurityGroup: #Abre as portas 22 (SSH) e 80 (HTTP) para acesso à instância.
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Permitir acesso HTTP e SSH
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+Mappings: #Mapeia a AMI do Amazon Linux 2 para diferentes regiões.
+  RegionMap:
+    us-east-1:
+      AMI: "ami-0ff8a91507f77f867"  # AMI Amazon Linux 2 na região us-east-1
+    us-west-2:
+      AMI: "ami-0bdb828fd58c52235"  # AMI Amazon Linux 2 na região us-west-2
+
+Outputs:
+  InstanceId: #Exibe o ID da instância EC2 criada.
+    Description: "ID da instância EC2 criada"
+    Value: !Ref MyEC2Instance
+  PublicIP: #Exibe o endereço IP público da instância.
+    Description: "Endereço IP público da instância EC2"
+    Value: !GetAtt MyEC2Instance.PublicIp
+  WebURL: #Exibe a URL onde o Nginx está rodando.
+    Description: "URL do serviço Nginx rodando na instância"
+    Value: !Sub "http://${MyEC2Instance.PublicIp}"
